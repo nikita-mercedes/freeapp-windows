@@ -1,0 +1,90 @@
+name: Build Mac
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Релиз, в который положить файлы (например v1.7.0)"
+        default: "v1.7.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+            label: AppleSilicon
+          - os: macos-15-intel
+            arch: amd64
+            label: Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Распаковать исходники
+        run: unzip -q mac-src.zip -d src
+
+      - name: Поставить инструменты сборки
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pymobiledevice3
+
+      - name: Собрать модуль установки на iPhone
+        working-directory: src
+        run: pyinstaller --noconfirm --onedir --name pmd3 --collect-all pymobiledevice3 --collect-submodules typer pmd3_entry.py
+
+      - name: Собрать программу
+        working-directory: src
+        run: pyinstaller --noconfirm --windowed --name FreeApp --icon icon.icns --add-data "ui:ui" --add-data "catalog.json:." server.py
+
+      - name: Положить движок внутрь программы и подписать
+        working-directory: src
+        run: |
+          APP=dist/FreeApp.app/Contents/MacOS
+          mkdir -p "$APP/engine"
+          curl -fsSL -o ipatool.tgz "https://github.com/majd/ipatool/releases/download/v2.7.0/ipatool-2.7.0-macos-${{ matrix.arch }}.tar.gz"
+          mkdir ip && tar -xzf ipatool.tgz -C ip
+          cp ip/bin/ipatool-* "$APP/engine/ipatool"
+          chmod +x "$APP/engine/ipatool"
+          cp -R dist/pmd3 "$APP/engine/pmd3"
+          find "$APP/engine" -type f | while read -r f; do
+            if file "$f" | grep -q "Mach-O"; then codesign --force --sign - "$f"; fi
+          done
+          codesign --force --sign - dist/FreeApp.app
+
+      - name: Проверка, что всё запускается
+        working-directory: src
+        run: |
+          APP=dist/FreeApp.app/Contents/MacOS
+          "$APP/engine/ipatool" --version
+          "$APP/engine/pmd3/pmd3" usbmux list
+          "$APP/FreeApp" &
+          sleep 8
+          curl -fsS http://127.0.0.1:8765/api/ping
+          echo
+          curl -fsS http://127.0.0.1:8765/api/catalog | python -c "import sys,json; n=len(json.load(sys.stdin)); print('apps:', n); sys.exit(0 if n>100 else 1)"
+          pkill -f "MacOS/FreeApp" || true
+
+      - name: Упаковать
+        working-directory: src
+        run: ditto -c -k --sequesterRsrc --keepParent dist/FreeApp.app "FreeApp-Mac-${{ matrix.label }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FreeApp-Mac-${{ matrix.label }}
+          path: src/FreeApp-Mac-${{ matrix.label }}.zip
+
+      - name: Положить в релиз
+        working-directory: src
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" "FreeApp-Mac-${{ matrix.label }}.zip" --clobber --repo "${{ github.repository }}"
