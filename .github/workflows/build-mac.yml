@@ -49,7 +49,7 @@ jobs:
       - name: Положить движок внутрь программы и подписать
         working-directory: src
         run: |
-          APP=dist/FreeApp.app/Contents/MacOS
+          APP=dist/FreeApp.app/Contents/Resources
           mkdir -p "$APP/engine"
           curl -fsSL -o ipatool.tgz "https://github.com/majd/ipatool/releases/download/v2.7.0/ipatool-2.7.0-macos-${{ matrix.arch }}.tar.gz"
           mkdir ip && tar -xzf ipatool.tgz -C ip
@@ -64,10 +64,10 @@ jobs:
       - name: Проверка, что всё запускается
         working-directory: src
         run: |
-          APP=dist/FreeApp.app/Contents/MacOS
-          "$APP/engine/ipatool" --version
-          "$APP/engine/pmd3/pmd3" usbmux list
-          "$APP/FreeApp" &
+          RES=dist/FreeApp.app/Contents/Resources
+          "$RES/engine/ipatool" --version
+          "$RES/engine/pmd3/pmd3" usbmux list
+          dist/FreeApp.app/Contents/MacOS/FreeApp &
           sleep 8
           curl -fsS http://127.0.0.1:8765/api/ping
           echo
