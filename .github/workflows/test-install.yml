@@ -1,0 +1,30 @@
+name: Test install-mac
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install with release command
+        run: curl -fsSL https://github.com/nikita-mercedes/freeapp-windows/releases/latest/download/install-mac.sh | bash
+
+      - name: Check app is installed and running
+        run: |
+          ls -la /Applications/FreeApp.app/Contents/MacOS/
+          xattr -l /Applications/FreeApp.app || true
+          sleep 10
+          curl -fsS http://127.0.0.1:8765/api/ping
+          echo
+          curl -fsS http://127.0.0.1:8765/api/catalog | python3 -c "import sys,json; n=len(json.load(sys.stdin)); print('apps:', n); sys.exit(0 if n>100 else 1)"
+
+      - name: Reinstall over existing
+        run: curl -fsSL https://github.com/nikita-mercedes/freeapp-windows/releases/latest/download/install-mac.sh | bash
+
+      - name: Gatekeeper assessment
+        run: spctl --assess --type execute -vv /Applications/FreeApp.app || true
