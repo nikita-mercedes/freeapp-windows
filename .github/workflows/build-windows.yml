@@ -1,0 +1,76 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Релиз, в который положить файл (например v1.7.0)"
+        default: "v1.7.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Распаковать исходники
+        run: unzip -q win-src.zip -d src
+
+      - name: Поставить инструменты сборки
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pymobiledevice3
+
+      - name: Собрать модуль установки на iPhone
+        working-directory: src
+        run: pyinstaller --noconfirm --onefile --name pmd3 --collect-all pymobiledevice3 --collect-submodules typer pmd3_entry.py
+
+      - name: Собрать программу
+        working-directory: src
+        run: pyinstaller --noconfirm --windowed --name FreeApp --icon icon.ico --add-data "ui;ui" --add-data "catalog.json;." server.py
+
+      - name: Положить движок и упаковать
+        working-directory: src
+        run: |
+          mkdir -p dist/FreeApp/engine
+          curl -fsSL -o ipatool.tgz "https://github.com/majd/ipatool/releases/download/v2.7.0/ipatool-2.7.0-windows-amd64.tar.gz"
+          mkdir ip && tar -xzf ipatool.tgz -C ip
+          cp ip/bin/ipatool-*.exe dist/FreeApp/engine/ipatool.exe
+          cp dist/pmd3.exe dist/FreeApp/engine/pmd3.exe
+          cd dist && python -m zipfile -c ../payload.zip FreeApp
+
+      - name: Проверка, что всё запускается
+        working-directory: src
+        run: |
+          dist/FreeApp/engine/ipatool.exe --version
+          dist/FreeApp/FreeApp.exe &
+          sleep 10
+          curl -fsS http://127.0.0.1:8765/api/ping
+          echo
+          curl -fsS http://127.0.0.1:8765/api/catalog | python -c "import sys,json; n=len(json.load(sys.stdin)); print('apps:', n); sys.exit(0 if n>100 else 1)"
+          taskkill //F //IM FreeApp.exe || true
+
+      - name: Собрать установщик
+        working-directory: src
+        run: pyinstaller --noconfirm --onefile --windowed --name FreeApp-Setup --icon icon.ico --add-data "payload.zip;." setup.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FreeApp-Setup
+          path: src/dist/FreeApp-Setup.exe
+
+      - name: Положить в релиз
+        working-directory: src
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" dist/FreeApp-Setup.exe --clobber --repo "${{ github.repository }}"
